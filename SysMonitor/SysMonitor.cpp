@@ -15,7 +15,7 @@ DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING) {
 
 	UNICODE_STRING symLink = RTL_CONSTANT_STRING(L"\\??\\sysmon");
 	UNICODE_STRING devName = RTL_CONSTANT_STRING(L"\\Device\\sysmon");
-	bool symLinkCreated = false;
+	bool symLinkCreated = false, processCallbacks = false, threadCallbacks = false;
 
 	PDEVICE_OBJECT DeviceObject = nullptr;
 	status = IoCreateDevice(DriverObject, 0, &devName, FILE_DEVICE_UNKNOWN, 0, true, &DeviceObject);
@@ -37,6 +37,20 @@ DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING) {
 		dbgprintf("Failed to set create process notify routine.\n");
 		goto end;
 	}
+	processCallbacks = true;
+
+	status = PsSetCreateThreadNotifyRoutine(OnThreadNotify);
+	if (!NT_SUCCESS(status)) {
+		dbgprintf("Failed to set create thread notify routine.\n");
+		goto end;
+	}
+	threadCallbacks = false;
+
+	status = PsSetLoadImageNotifyRoutine(OnLoadImageNotify);
+	if (!NT_SUCCESS(status)) {
+		dbgprintf("Failed to set load image notify routine.\n");
+		goto end;
+	}
 
 end:
 	if (!NT_SUCCESS(status)) {
@@ -44,6 +58,10 @@ end:
 			IoDeleteSymbolicLink(&symLink);
 		if (DeviceObject)
 			IoDeleteDevice(DeviceObject);
+		if (processCallbacks)
+			PsSetCreateProcessNotifyRoutineEx(OnProcessNotify, true);
+		if (threadCallbacks)
+			PsRemoveCreateThreadNotifyRoutine(OnThreadNotify);
 	}
 
 	DriverObject->DriverUnload = SysMonUnload;
@@ -88,11 +106,11 @@ void PushItem(LIST_ENTRY* entry) {
 }
 
 _Use_decl_annotations_
-void OnProcessNotify(PEPROCESS Process, HANDLE ProcessId, PPS_CREATE_NOTIFY_INFO CreateInfo) {
+VOID OnProcessNotify(PEPROCESS Process, HANDLE ProcessId, PPS_CREATE_NOTIFY_INFO CreateInfo) {
 	UNREFERENCED_PARAMETER(Process);
 
 	if (CreateInfo) {
-		USHORT allocSize = sizeof(FullItem<ProcessCreateInfo>);
+		auto allocSize = sizeof(FullItem<ProcessCreateInfo>);
 		USHORT commandLineSize = 0;
 		if (CreateInfo->CommandLine) {
 			commandLineSize = CreateInfo->CommandLine->Length;
@@ -101,6 +119,7 @@ void OnProcessNotify(PEPROCESS Process, HANDLE ProcessId, PPS_CREATE_NOTIFY_INFO
 		}
 		auto info = (FullItem<ProcessCreateInfo>*)ExAllocatePoolWithTag(PagedPool, allocSize, DRIVER_TAG);
 		if (info == nullptr) {
+			dbgprintf("Failed to allocate pool with tag on process create notify.\n");
 			return;
 		}
 
@@ -112,7 +131,7 @@ void OnProcessNotify(PEPROCESS Process, HANDLE ProcessId, PPS_CREATE_NOTIFY_INFO
 		item.ParentProcessId = HandleToULong(CreateInfo->ParentProcessId);
 
 		if (commandLineSize > 0) {
-			::memcpy((UCHAR*)&item + sizeof(item), CreateInfo->CommandLine->Buffer, commandLineSize);
+			memcpy((UCHAR*)&item + sizeof(item), CreateInfo->CommandLine->Buffer, commandLineSize);
 			item.CommandLineLength = commandLineSize / sizeof(WCHAR);
 			item.CommandLineOffset = sizeof(item);
 		}
@@ -125,6 +144,7 @@ void OnProcessNotify(PEPROCESS Process, HANDLE ProcessId, PPS_CREATE_NOTIFY_INFO
 		// process exited
 		auto info = (FullItem<ProcessExitInfo>*)ExAllocatePoolWithTag(PagedPool, sizeof(FullItem<ProcessExitInfo>), DRIVER_TAG);
 		if (info == nullptr) {
+			dbgprintf("Failed to allocate pool with tag on process exit notify.\n");
 			return;
 		}
 
@@ -137,6 +157,62 @@ void OnProcessNotify(PEPROCESS Process, HANDLE ProcessId, PPS_CREATE_NOTIFY_INFO
 		PushItem(&info->Entry);
 	}
 }
+
+_Use_decl_annotations_
+VOID OnThreadNotify(HANDLE ProcessId, HANDLE ThreadId, BOOLEAN Create) {
+	auto size = sizeof(FullItem<ThreadCreateExitInfo>);
+	auto info = (FullItem<ThreadCreateExitInfo>*)ExAllocatePoolWithTag(PagedPool, size, DRIVER_TAG);
+	if (info == nullptr) {
+		dbgprintf("Failed to allocate pool with tag on thread notify.\n");
+		return;
+	}
+
+	auto& item = info->Data;
+	KeQuerySystemTimePrecise(&item.Time);
+	item.Type = Create ? ItemType::ThreadCreate : ItemType::ThreadExit;
+	item.ProcessId = HandleToULong(ProcessId);
+	item.ThreadId = HandleToULong(ThreadId);
+	item.Size = sizeof(ProcessExitInfo);
+
+	PushItem(&info->Entry);
+}
+
+_Use_decl_annotations_
+VOID OnLoadImageNotify(PUNICODE_STRING FullImageName, HANDLE ProcessId, PIMAGE_INFO ImageInfo) {
+	if (ImageInfo->SystemModeImage)
+		return;
+
+	auto size = sizeof(FullItem<ImageLoadInfo>);
+	USHORT fullImageNameSize = 0;
+	if (FullImageName != nullptr) {
+		fullImageNameSize = FullImageName->Length;
+		size += fullImageNameSize;
+	}
+
+	auto info = (FullItem<ImageLoadInfo>*)ExAllocatePoolWithTag(PagedPool, size, DRIVER_TAG);
+	if (info == nullptr) {
+		dbgprintf("Failed to allocate pool with tag on image load notify.\n");
+		return;
+	}
+
+	auto& item = info->Data;
+	KeQuerySystemTimePrecise(&item.Time);
+	item.Type = ItemType::ImageLoad;
+	item.ProcessId = HandleToULong(ProcessId);
+	item.Size = sizeof(ImageLoadInfo) + fullImageNameSize;
+
+	if (fullImageNameSize) {
+		memcpy((UCHAR*)&item + sizeof(item), FullImageName->Buffer, fullImageNameSize);
+		item.ImagePathLength = fullImageNameSize / sizeof(WCHAR);
+		item.ImagePathOffset = sizeof(item);
+	}
+	else {
+		item.ImagePathLength = 0;
+	}
+
+	PushItem(&info->Entry);
+}
+
 
 NTSTATUS SysMonRead(PDEVICE_OBJECT, PIRP Irp) {
 	auto stack = IoGetCurrentIrpStackLocation(Irp);
@@ -163,7 +239,7 @@ NTSTATUS SysMonRead(PDEVICE_OBJECT, PIRP Irp) {
 				break;
 			}
 			g_Globals.ItemCount--;
-			::memcpy(buffer, &info->Data, size);
+			memcpy(buffer, &info->Data, size);
 			len -= size;
 			buffer += size;
 			count += size;

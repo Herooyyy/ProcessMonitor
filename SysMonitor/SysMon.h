@@ -22,7 +22,10 @@ public:
 };
 
 // Function prototypes
-void OnProcessNotify( _Inout_ PEPROCESS Process, _In_ HANDLE ProcessId, _In_ PPS_CREATE_NOTIFY_INFO CreateInfo);
+VOID OnProcessNotify(_Inout_ PEPROCESS Process, _In_ HANDLE ProcessId, _In_ PPS_CREATE_NOTIFY_INFO CreateInfo);
+VOID OnThreadNotify(_In_ HANDLE ProcessId, _In_ HANDLE ThreadId, _In_ BOOLEAN Create);
+VOID OnLoadImageNotify(_In_opt_ PUNICODE_STRING FullImageName, _In_ HANDLE ProcessId, _In_ PIMAGE_INFO ImageInfo);
+
 NTSTATUS SysMonRead(PDEVICE_OBJECT DeviceObject, PIRP Irp);
 NTSTATUS SysMonCreateClose(PDEVICE_OBJECT, PIRP Irp);
 void SysMonUnload(PDRIVER_OBJECT DriverObject);

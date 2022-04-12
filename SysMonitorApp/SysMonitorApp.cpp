@@ -4,13 +4,13 @@
 #include <string>
 
 int Error(const char* text) {
-	printf("%s (%d)\n", text, ::GetLastError());
+	printf("%s (%d)\n", text, GetLastError());
 	return 1;
 }
 
 void DisplayTime(const LARGE_INTEGER& time) {
 	SYSTEMTIME st;
-	::FileTimeToSystemTime((FILETIME*)&time, &st);
+	FileTimeToSystemTime((FILETIME*)&time, &st);
 	printf("%02d:%02d:%02d.%03d: ", st.wHour, st.wMinute, st.wSecond, st.wMilliseconds);
 }
 
@@ -33,6 +33,30 @@ void DisplayInfo(BYTE* buffer, DWORD size) {
 			auto info = (ProcessCreateInfo*)buffer;
 			std::wstring commandline((WCHAR*)(buffer + info->CommandLineOffset), info->CommandLineLength);
 			printf("Process %d Created. Command line: %ws\n", info->ProcessId, commandline.c_str());
+			break;
+		}
+		case ItemType::ThreadCreate:
+		{
+			DisplayTime(header->Time);
+			auto info = (ThreadCreateExitInfo*)buffer;
+			printf("Thread %d Created in process %d\n",
+				info->ThreadId, info->ProcessId);
+			break;
+		}
+		case ItemType::ThreadExit:
+		{
+			DisplayTime(header->Time);
+			auto info = (ThreadCreateExitInfo*)buffer;
+			printf("Thread %d Exited from process %d\n",
+				info->ThreadId, info->ProcessId);
+			break;
+		}
+		case ItemType::ImageLoad:
+		{
+			DisplayTime(header->Time);
+			auto info = (ImageLoadInfo*)buffer;
+			std::wstring imagename((WCHAR*)(buffer + info->ImagePathOffset), info->ImagePathLength);
+			printf("Image loaded in process %d : %ws\n", info->ProcessId, imagename.c_str());
 			break;
 		}
 
