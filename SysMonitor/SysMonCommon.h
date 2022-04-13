@@ -6,7 +6,8 @@ enum class ItemType : short {
 	ProcessExit,
 	ThreadCreate,
 	ThreadExit,
-	ImageLoad
+	ImageLoad,
+	RemoteThreadCreate
 };
 
 struct ItemHeader {
@@ -30,6 +31,12 @@ struct ProcessCreateInfo : ItemHeader {
 
 struct ThreadCreateExitInfo : ItemHeader {
 	ULONG ProcessId;
+	ULONG ThreadId;
+};
+
+struct RemoteThreadCreateInfo : ItemHeader {
+	ULONG SourceProcessId;
+	ULONG TargetProcessId;
 	ULONG ThreadId;
 };
 

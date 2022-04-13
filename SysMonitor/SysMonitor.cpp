@@ -160,21 +160,45 @@ VOID OnProcessNotify(PEPROCESS Process, HANDLE ProcessId, PPS_CREATE_NOTIFY_INFO
 
 _Use_decl_annotations_
 VOID OnThreadNotify(HANDLE ProcessId, HANDLE ThreadId, BOOLEAN Create) {
-	auto size = sizeof(FullItem<ThreadCreateExitInfo>);
-	auto info = (FullItem<ThreadCreateExitInfo>*)ExAllocatePoolWithTag(PagedPool, size, DRIVER_TAG);
-	if (info == nullptr) {
-		dbgprintf("Failed to allocate pool with tag on thread notify.\n");
-		return;
+	
+	// Remote thread creation check
+	// OnThreadNotify is called in the context of the process that created the thread. So we can compare that process with the ProcessId that is passed to OnThreadNotify.
+	auto currProcessId = PsGetCurrentProcessId();
+	if (currProcessId == ProcessId) {
+		auto size = sizeof(FullItem<ThreadCreateExitInfo>);
+		auto info = (FullItem<ThreadCreateExitInfo>*)ExAllocatePoolWithTag(PagedPool, size, DRIVER_TAG);
+		if (info == nullptr) {
+			dbgprintf("Failed to allocate pool with tag on thread notify.\n");
+			return;
+		}
+
+		auto& item = info->Data;
+		KeQuerySystemTimePrecise(&item.Time);
+		item.Type = Create ? ItemType::ThreadCreate : ItemType::ThreadExit;
+		item.ProcessId = HandleToULong(ProcessId);
+		item.ThreadId = HandleToULong(ThreadId);
+		item.Size = sizeof(ProcessExitInfo);
+
+		PushItem(&info->Entry);
 	}
+	else {
+		auto size = sizeof(FullItem<RemoteThreadCreateInfo>);
+		auto info = (FullItem<RemoteThreadCreateInfo>*)ExAllocatePoolWithTag(PagedPool, size, DRIVER_TAG);
+		if (info == nullptr) {
+			dbgprintf("Failed to allocate pool with tag on remote thread notify.\n");
+			return;
+		}
 
-	auto& item = info->Data;
-	KeQuerySystemTimePrecise(&item.Time);
-	item.Type = Create ? ItemType::ThreadCreate : ItemType::ThreadExit;
-	item.ProcessId = HandleToULong(ProcessId);
-	item.ThreadId = HandleToULong(ThreadId);
-	item.Size = sizeof(ProcessExitInfo);
+		auto& item = info->Data;
+		KeQuerySystemTimePrecise(&item.Time);
+		item.Type = ItemType::RemoteThreadCreate;
+		item.TargetProcessId = HandleToULong(ProcessId);
+		item.SourceProcessId = HandleToULong(currProcessId);	
+		item.ThreadId = HandleToULong(ThreadId);
+		item.Size = sizeof(RemoteThreadCreateInfo);
 
-	PushItem(&info->Entry);
+		PushItem(&info->Entry);
+	}
 }
 
 _Use_decl_annotations_

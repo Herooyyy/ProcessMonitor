@@ -59,6 +59,13 @@ void DisplayInfo(BYTE* buffer, DWORD size) {
 			printf("Image loaded in process %d : %ws\n", info->ProcessId, imagename.c_str());
 			break;
 		}
+		case ItemType::RemoteThreadCreate:
+		{
+			DisplayTime(header->Time);
+			auto info = (RemoteThreadCreateInfo*)buffer;
+			printf("Process %d created a remote thread %d on process %d\n", info->SourceProcessId, info->TargetProcessId, info->ThreadId);
+			break;
+		}
 
 		default:
 			break;
