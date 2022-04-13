@@ -15,7 +15,7 @@ Now we can install our driver service.
     sc create sysmonitor type= kernel binPath= path\to\driver\SysMonitor.sys
     sc start sysmonitor
 
-After installing and starting the booster service we can now run the usermode application.
+After installing and starting the sysmonitor service we can now run the usermode application.
 
 ![Example](Images/Example.png)
 
